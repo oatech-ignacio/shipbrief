@@ -14,4 +14,3 @@ ShipBrief is a Forge app that runs entirely on Atlassian's platform.
 Uninstalling the app removes it completely; there is no data to delete.
 
 Contact: ultralcc@gmail.com
-```
