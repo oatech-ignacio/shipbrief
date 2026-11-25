@@ -2,10 +2,14 @@
 // so the brief never shows anything the user could not already see.
 import api, { route } from '@forge/api';
 import { TWG_QUERIES } from './twg-queries';
+import { isShipBriefComment } from './brief';
+import { parseDevSummary, friendlyGraphError } from './devinfo';
 
 const ISSUE_FIELDS =
   'summary,description,status,issuetype,priority,assignee,reporter,labels,fixVersions,duedate,parent,issuelinks,subtasks,comment,updated,created,components';
 const MAX_COMMENTS = 15;
+// Fetch a few extra so that briefs posted by ShipBrief itself (which are skipped) do not crowd out real comments.
+const COMMENT_FETCH = 30;
 const MAX_CHILDREN = 100;
 
 // Atlassian Document Format -> plain text
@@ -116,18 +120,14 @@ export async function getIssueContext(issueKey, { siteUrl } = {}) {
   let rawComments = f.comment?.comments || [];
   if ((f.comment?.total || 0) > rawComments.length) {
     try {
-      const page = await jiraGet(route`/rest/api/3/issue/${issueKey}/comment?orderBy=-created&maxResults=${MAX_COMMENTS}`);
+      const page = await jiraGet(route`/rest/api/3/issue/${issueKey}/comment?orderBy=-created&maxResults=${COMMENT_FETCH}`);
       rawComments = (page.comments || []).reverse();
     } catch (e) {
       /* keep the embedded page */
     }
   }
-  const comments = rawComments.slice(-MAX_COMMENTS).map((c) => ({
-    author: c.author?.displayName || 'Unknown',
-    authorId: c.author?.accountId,
-    created: c.created,
-    text: adfToText(c.body).trim()
-  }));
+  // Briefs that ShipBrief posted earlier are not evidence: analysing them would feed the brief back into itself.
+  const { comments, ignoredBriefComments } = selectComments(rawComments);
 
   let parent = null;
   if (f.parent?.key) {
@@ -158,7 +158,18 @@ export async function getIssueContext(issueKey, { siteUrl } = {}) {
     }
   }
 
-  return { issue, parent, links, subtasks, comments, children };
+  return { issue, parent, links, subtasks, comments, ignoredBriefComments, children };
+}
+
+export function selectComments(rawComments = []) {
+  const all = rawComments.map((c) => ({
+    author: c.author?.displayName || 'Unknown',
+    authorId: c.author?.accountId,
+    created: c.created,
+    text: adfToText(c.body).trim()
+  }));
+  const human = all.filter((c) => !isShipBriefComment(c.text));
+  return { comments: human.slice(-MAX_COMMENTS), ignoredBriefComments: all.length - human.length };
 }
 
 // Enhanced JQL search (POST /rest/api/3/search/jql): returns { issues, nextPageToken }, no total.
@@ -261,29 +272,59 @@ async function twg(name, id) {
     const res = await api.asUser().requestTeamworkGraph(query, { id }, /query (\w+)/.exec(query)[1]);
     const body = await res.json();
     if (body.errors?.length) {
-      return { items: [], unavailable: `Teamwork Graph: ${body.errors[0].message}` };
+      console.warn('ShipBrief Teamwork Graph error', name, body.errors[0].message);
+      return { items: [], unavailable: friendlyGraphError(body.errors[0].message) };
     }
     const field = Object.values(body.data || {})[0];
     return { items: (field?.edges || []).map((e) => e.node).filter(Boolean) };
   } catch (e) {
-    return { items: [], unavailable: `Teamwork Graph is not available (${e.message}).` };
+    console.warn('ShipBrief Teamwork Graph call failed', name, e.message);
+    return { items: [], unavailable: friendlyGraphError(e.message) };
+  }
+}
+
+// Fallback when the Teamwork Graph cannot be queried: Jira's own "development" field (the data behind the
+// development panel). It only holds a cached summary (counts and overall state, no titles or links), but it is
+// readable with read:jira-work on every site. The field id differs per site, so it is looked up by its type.
+const DEV_FIELD_TYPE = 'com.atlassian.jira.plugins.jira-development-integration-plugin:devsummarycf';
+const devFieldIds = new Map();
+
+async function getDevSummary(issueId, cloudId) {
+  try {
+    if (!devFieldIds.has(cloudId)) {
+      const fields = await jiraGet(route`/rest/api/3/field`);
+      devFieldIds.set(cloudId, fields.find((f) => f.schema?.custom === DEV_FIELD_TYPE)?.id || null);
+    }
+    const fieldId = devFieldIds.get(cloudId);
+    if (!fieldId) return null;
+    const raw = await jiraGet(route`/rest/api/3/issue/${issueId}?fields=${fieldId}`);
+    return parseDevSummary(raw.fields?.[fieldId]);
+  } catch (e) {
+    console.warn('ShipBrief development summary fallback failed', e.message);
+    return null;
   }
 }
 
 export async function getDeliveryStatus(issueId, cloudId) {
-  if (!cloudId || !issueId) {
-    const unavailable = 'The site id is not known in this context, so the Teamwork Graph was not queried.';
+  if (!issueId) {
+    const unavailable = 'The work item id is not known, so development data was not read.';
     return { pullRequests: { items: [], unavailable }, deployments: { items: [], unavailable }, goals: { items: [], unavailable } };
   }
+  const noSite = { items: [], unavailable: 'The site id is not known in this context, so the Teamwork Graph was not queried.' };
   const ari = `ari:cloud:jira:${cloudId}:issue/${issueId}`;
-  const [prs, deps, goals] = await Promise.all([twg('pullRequests', ari), twg('deployments', ari), twg('goals', ari)]);
-  return {
+  const [prs, deps, goals] = cloudId
+    ? await Promise.all([twg('pullRequests', ari), twg('deployments', ari), twg('goals', ari)])
+    : [noSite, noSite, noSite];
+
+  const out = {
     pullRequests: {
       ...prs,
+      source: 'teamwork-graph',
       items: prs.items.map((p) => ({ title: p.title || p.displayName, url: safeUrl(p.url), status: p.status, updatedAt: p.lastUpdatedAt }))
     },
     deployments: {
       ...deps,
+      source: 'teamwork-graph',
       items: deps.items.map((d) => ({
         name: d.displayName,
         url: safeUrl(d.url),
@@ -298,6 +339,17 @@ export async function getDeliveryStatus(issueId, cloudId) {
       items: goals.items.filter((g) => g.name && !g.archived).map((g) => ({ name: g.name, key: g.key, url: safeUrl(g.url), due: g.dueDateEndedAt }))
     }
   };
+
+  if (prs.unavailable || deps.unavailable) {
+    const dev = await getDevSummary(issueId, cloudId || 'site');
+    if (dev) {
+      const source = 'jira-development-summary';
+      if (prs.unavailable) out.pullRequests = { items: [], source, summary: dev.pullRequests, graphNote: prs.unavailable };
+      if (deps.unavailable) out.deployments = { items: [], source, summary: dev.deployments, graphNote: deps.unavailable };
+      out.builds = { source, summary: dev.builds };
+    }
+  }
+  return out;
 }
 
 export async function gatherAll(issueKey, { cloudId, siteUrl } = {}) {

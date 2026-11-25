@@ -11,6 +11,7 @@ const AC_RE =
 const TEST_RE = /\b(test plan|tested|qa|verified|unit tests?|e2e|regression test|how to test)\b/i;
 
 const WEIGHTS = { fail: 0, warn: 0.5, pass: 1 };
+const VIA_JIRA = ' Source: Jira development summary (the Teamwork Graph was not available).';
 
 export function clip(text, max = 280) {
   const t = (text || '').replace(/\s+/g, ' ').trim();
@@ -21,6 +22,16 @@ const isDone = (item) => item?.statusCategory === 'done';
 
 function check(id, label, status, detail, weight = 1) {
   return { id, label, status, detail, weight };
+}
+
+// Every brief that ShipBrief posts ends with this marker. Comments that carry it (or that look like a brief
+// posted before the marker existed) are skipped by the analysis, so a posted brief never changes the next brief.
+export const BRIEF_MARKER = '[shipbrief-brief]';
+const LEGACY_BRIEF_RE = /^\s*ShipBrief for [A-Z][A-Z0-9_]*-\d+: (READY|NEEDS ATTENTION|NOT READY|SHIPPED) \(\d{1,3}\/100\)/i;
+
+export function isShipBriefComment(text) {
+  const t = String(text || '');
+  return t.includes(BRIEF_MARKER) || LEGACY_BRIEF_RE.test(t);
 }
 
 export function classifyComments(comments = []) {
@@ -41,7 +52,9 @@ export function classifyComments(comments = []) {
 }
 
 export function buildBrief(ctx, now = Date.now()) {
-  const { issue, parent, links = [], subtasks = [], comments = [], children, docs, delivery } = ctx;
+  const { issue, parent, links = [], subtasks = [], children, docs, delivery } = ctx;
+  // context.js already drops ShipBrief's own comments; filtering again keeps this function safe for any caller.
+  const comments = (ctx.comments || []).filter((c) => !isShipBriefComment(c.text));
   const checks = [];
   const missing = [];
   const inFlight = issue.statusCategory === 'indeterminate';
@@ -173,10 +186,17 @@ export function buildBrief(ctx, now = Date.now()) {
     missing.push('A note on how this was (or will be) tested.');
   }
 
-  // 10. Code: pull requests (Teamwork Graph)
+  // 10. Code: pull requests (Teamwork Graph, or Jira's development summary when the graph cannot be queried)
   const prs = delivery?.pullRequests;
   if (!prs || prs.unavailable) {
     checks.push(check('code', 'Pull requests', 'unknown', prs?.unavailable || 'Development data was not requested.'));
+  } else if (prs.summary) {
+    const { count, state } = prs.summary;
+    if (!count) checks.push(check('code', 'Pull requests', 'unknown', `No pull requests are linked to this work item in Jira's development panel.${VIA_JIRA}`));
+    else if (state === 'OPEN') checks.push(check('code', 'Pull requests', 'warn', `${count} pull request(s) linked, at least one still open.${VIA_JIRA}`, 2));
+    else if (state === 'MERGED') checks.push(check('code', 'Pull requests', 'pass', `${count} pull request(s) linked, merged.${VIA_JIRA}`, 2));
+    else if (state === 'DECLINED') checks.push(check('code', 'Pull requests', 'warn', `${count} pull request(s) linked, declined; nothing merged.${VIA_JIRA}`, 2));
+    else checks.push(check('code', 'Pull requests', 'unknown', `${count} linked pull request(s) with unknown status.${VIA_JIRA}`));
   } else if (!prs.items.length) {
     checks.push(check('code', 'Pull requests', 'unknown', 'No pull requests are linked to this work item in the Teamwork Graph.'));
   } else {
@@ -188,10 +208,27 @@ export function buildBrief(ctx, now = Date.now()) {
     else checks.push(check('code', 'Pull requests', 'unknown', `${prs.items.length} linked pull request(s) with unknown status.`));
   }
 
-  // 11. Deployments (Teamwork Graph)
+  // 10b. Builds. Only known through Jira's development summary, and only reported when there are any.
+  const builds = delivery?.builds?.summary;
+  if (builds?.count) {
+    if (builds.failed) checks.push(check('builds', 'Builds', 'warn', `${builds.failed} of ${builds.count} linked build(s) failed.${VIA_JIRA}`));
+    else if (builds.successful === builds.count) checks.push(check('builds', 'Builds', 'pass', `All ${builds.count} linked build(s) passed.${VIA_JIRA}`));
+    else checks.push(check('builds', 'Builds', 'unknown', `${builds.count} linked build(s), ${builds.successful} passed, the rest have no result yet.${VIA_JIRA}`));
+  }
+
+  // 11. Deployments (Teamwork Graph, or Jira's development summary)
   const deps = delivery?.deployments;
   if (!deps || deps.unavailable) {
     checks.push(check('deploy', 'Deployments', 'unknown', deps?.unavailable || 'Deployment data was not requested.'));
+  } else if (deps.summary) {
+    const { count, environments = [] } = deps.summary;
+    // The summary has no per-deployment state, so it is reported as evidence but never scored.
+    const where = environments.length ? ` (${environments.join(', ')})` : '';
+    checks.push(
+      check('deploy', 'Deployments', 'unknown', count
+        ? `${count} deployment environment(s) linked${where}; their state is not available without the Teamwork Graph.${VIA_JIRA}`
+        : `No deployments are linked to this work item in Jira's development panel.${VIA_JIRA}`)
+    );
   } else if (!deps.items.length) {
     checks.push(check('deploy', 'Deployments', 'unknown', 'No deployments are linked to this work item in the Teamwork Graph.'));
   } else {
@@ -259,6 +296,7 @@ export function buildBrief(ctx, now = Date.now()) {
     openQuestions,
     pullRequests: prs?.items || [],
     deployments: deps?.items || [],
+    deliverySource: { pullRequests: prs?.source || null, deployments: deps?.source || null },
     docs: docs?.items || [],
     generatedAt: new Date(now).toISOString()
   };
@@ -271,6 +309,6 @@ export function briefToText(b) {
   if (b.missing.length) lines.push('', 'Missing information:', ...b.missing.map((m) => `• ${m}`));
   if (b.decisions.length) lines.push('', 'Decisions found in comments:', ...b.decisions.map((d) => `• ${d.author}: ${d.text}`));
   if (b.openQuestions.length) lines.push('', 'Open questions:', ...b.openQuestions.map((q) => `• ${q.author}: ${q.text}`));
-  lines.push('', b.confidence);
+  lines.push('', b.confidence, '', `Posted by ShipBrief. Later briefs ignore this comment. ${BRIEF_MARKER}`);
   return lines.join('\n');
 }

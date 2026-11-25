@@ -52,8 +52,9 @@ modules:
 
         Rules:
         - Checks with status "unknown" could not be evaluated. Say so in one line
-          ("Pull requests and deployments could not be checked: no data in the Teamwork
-          Graph") and never treat unknown as good or bad.
+          ("Pull requests and deployments could not be checked") with the reason the
+          action gives, and never treat unknown as good or bad.
+        - Ignore earlier comments posted by ShipBrief itself; the actions already do.
         - If an action returns an "error" field, tell the user what it says and stop.
         - Summarise decisions in your own words and name the author.
         - Never invent issue keys, people, pull requests, deployments or pages.
@@ -128,8 +129,9 @@ modules:
       function: action-delivery
       actionVerb: GET
       description: >
-        Reads the Teamwork Graph for pull requests, deployments and goals connected to a
-        Jira work item (from Bitbucket, GitHub or any connected development tool).
+        Pull requests, deployments and goals connected to a Jira work item, read from the
+        Teamwork Graph. Falls back to Jira's development summary (counts and overall
+        state) when the graph cannot be queried.
       inputs:
         issueKey:
           title: Issue key
