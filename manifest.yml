@@ -69,11 +69,10 @@ modules:
       function: action-brief
       actionVerb: GET
       description: >
-        Produces a ship readiness brief for one Jira work item: verdict, score, checks
-        (pass, warn, fail, unknown), open blockers, decisions and open questions from
-        recent comments, pull request and deployment status, related Confluence pages
-        and a list of missing information. Use this first for any question about
-        whether a work item is ready, risky or blocked.
+        Produces a ship-readiness brief for one Jira work item: verdict, score, checks,
+        blockers, decisions, open questions, PR and deployment status, related docs,
+        and missing information. Use this first when asking if work is ready, risky,
+        or blocked.
       inputs:
         issueKey:
           title: Issue key
@@ -163,8 +162,8 @@ permissions:
     - read:graph:goal:atlassian
 
 app:
-  # Placeholder id. Run `forge register shipbrief` once (needs a Developer Space) to replace it.
-  id: ari:cloud:ecosystem::app/00000000-0000-4000-8000-000000000000
+  # Registered 2026-11-25 via forge register shipbrief.
+  id: ari:cloud:ecosystem::app/3c134f47-31f8-448b-8867-d98c471a9fc5
   runtime:
     name: nodejs24.x
     memoryMB: 256
