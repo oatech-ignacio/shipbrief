@@ -59,7 +59,17 @@ Each takes an optional `issueKey`. In Rovo chat, when it is left empty the work 
 1. **Teamwork Graph** (preferred): titles, links and states of linked pull requests and deployments, and goals.
 2. **Jira development summary** (fallback): if the graph refuses the query, ShipBrief reads the work item's `development` field through the Jira REST API. This is the cached summary behind Jira's development panel. It gives counts and an overall pull request state (open, merged, declined) and build results, but no titles or links and no per-deployment state. Checks that use it say so in their detail text, and deployment counts from it are shown but never scored.
 
-On some sites the Teamwork Graph answers "User is not permitted to query this organization" even with all scopes granted. That is decided by the organization, not by the app; ShipBrief then uses the fallback and says which source it used.
+### One-time Teamwork Graph consent
+
+The Teamwork Graph may answer "User is not permitted to query this organization" even with all scopes granted. On our demo site this was a missing one-time consent, not an organization block: after the user opened the [Teamwork Graph query builder](https://teamwork-graph.atlassian.com/query-builder) once with the same account, went through its authorize redirect and picked the site, the same queries from ShipBrief started to work.
+
+If the pull request and deployment rows say "The Teamwork Graph did not allow your account to query this organization":
+
+1. Open https://teamwork-graph.atlassian.com/query-builder with the account you use in Jira.
+2. Approve the authorization prompt and select your site.
+3. Go back to the work item and press **Refresh** in the ShipBrief panel.
+
+Until then ShipBrief uses the Jira development summary and says which source it used. We have only seen this on one site, so we do not know whether every user has to do it or once per organization is enough.
 
 ### ShipBrief ignores its own comments
 
@@ -125,7 +135,7 @@ The app has no storage, no remote backend and no external fetch permissions.
 - **Language**: decisions, risks, questions, acceptance criteria and test notes are found with English keywords only.
 - **Comments**: the 15 most recent comments (not counting ShipBrief's own) are analysed.
 - **Epics**: the first 100 child work items are read.
-- **Teamwork Graph**: Preview API. Curated queries return at most 25 items. Access depends on the organization; when it is refused the Jira development summary is used instead, with less detail (see above).
+- **Teamwork Graph**: Preview API. Curated queries return at most 25 items. A user may have to grant a one-time consent first (see above); while access is refused the Jira development summary is used instead, with less detail.
 - **Jira development summary**: a cache maintained by Jira that can be stale, and it needs a development tool connected to Jira. The pull request shape was implemented from Jira's known format and unit-tested; on the demo site only build data was available to check it against.
 - **Dates**: due-date and release-date checks depend on the day the brief is generated.
 - **Related pages**: at most 5 search results, plus pages linked on the issue. Only `https` links are passed to the UI and the agent.
@@ -143,6 +153,10 @@ forge logs -e development
 
 Actions log the key names (never the values) of the payload they receive, which is useful when Atlassian changes the Rovo context shape.
 
+## Demo data
+
+`scripts/seed/` holds the script that created the demo data for the video. See `scripts/seed/README.md`.
+
 ## License
 
-MIT
+[MIT](LICENSE)

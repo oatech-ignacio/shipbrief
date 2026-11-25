@@ -1,4 +1,21 @@
 node_modules/
-.env
-*.log
 .forge/
+dist/
+build/
+*.log
+.DS_Store
+
+# credentials and local environment: never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+credentials*.json
+forge_env
+.atlassian/
+.npmrc
+
+# local state written by scripts/seed
+scripts/seed/state.json
