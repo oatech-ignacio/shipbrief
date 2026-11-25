@@ -14,6 +14,7 @@ import ForgeReconciler, {
   Text
 } from '@forge/react';
 import { invoke } from '@forge/bridge';
+import { CONFLUENCE_SEARCH } from '../variant';
 
 const VERDICT = {
   SHIPPED: { label: 'Shipped', appearance: 'success' },
@@ -91,7 +92,7 @@ const App = () => {
       <Stack space="space.100">
         <Inline space="space.100" alignBlock="center">
           <Spinner size="small" label="Loading" />
-          <Text>Gathering context from Jira, Confluence and the Teamwork Graph…</Text>
+          <Text>{CONFLUENCE_SEARCH ? 'Gathering context from Jira, Confluence and the Teamwork Graph…' : 'Gathering context from Jira and the Teamwork Graph…'}</Text>
         </Inline>
         <Text size="small">Reading the work item, its parent, links, comments, related pages, pull requests and deployments.</Text>
       </Stack>

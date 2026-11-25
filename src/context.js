@@ -4,6 +4,7 @@ import api, { route } from '@forge/api';
 import { TWG_QUERIES } from './twg-queries';
 import { isShipBriefComment } from './brief';
 import { parseDevSummary, friendlyGraphError } from './devinfo';
+import { CONFLUENCE_SEARCH } from './variant';
 
 const ISSUE_FIELDS =
   'summary,description,status,issuetype,priority,assignee,reporter,labels,fixVersions,duedate,parent,issuelinks,subtasks,comment,updated,created,components';
@@ -220,6 +221,14 @@ export async function findRelatedDocs(issueKey, summary = '') {
     }
   } catch (e) {
     notes.push(`Issue links could not be read (${e.message}).`);
+  }
+
+  // Jira-only build: no Confluence scope, so only the linked pages are reported.
+  if (!CONFLUENCE_SEARCH) {
+    if (notes.length && items.size === 0) {
+      return { items: [], unavailable: `Linked pages could not be checked. ${notes.join(' ')}`.trim() };
+    }
+    return { items: [...items.values()], notes, linkedOnly: true };
   }
 
   // 2. Pages that mention the key or match the summary.

@@ -247,9 +247,9 @@ export function buildBrief(ctx, now = Date.now()) {
   if (!docs || docs.unavailable) {
     checks.push(check('docs', 'Documentation', 'unknown', docs?.unavailable || 'Documentation was not searched.'));
   } else if (docs.items.length) {
-    checks.push(check('docs', 'Documentation', 'pass', `${docs.items.length} related Confluence page(s), e.g. "${clip(docs.items[0].title, 80)}".`));
+    checks.push(check('docs', 'Documentation', 'pass', `${docs.items.length} ${docs.linkedOnly ? 'linked' : 'related'} Confluence page(s), e.g. "${clip(docs.items[0].title, 80)}".`));
   } else {
-    checks.push(check('docs', 'Documentation', 'warn', 'No Confluence page links to or mentions this work item.'));
+    checks.push(check('docs', 'Documentation', 'warn', docs.linkedOnly ? 'No Confluence page is linked on this work item.' : 'No Confluence page links to or mentions this work item.'));
     missing.push('A linked spec, design or runbook page.');
   }
 

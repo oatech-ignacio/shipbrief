@@ -99,6 +99,17 @@ Then:
 
 Confluence is optional. Without it the documentation check uses only the pages linked on the issue, or reports "could not be checked".
 
+## Jira-only Marketplace build
+
+The Marketplace listing uses a separate Forge app generated from this repo, so that the main app keeps its installation link and the listing can be free (an app that needs both Jira and Confluence scopes can only be listed as paid).
+
+```bash
+node scripts/build-marketplace.mjs            # writes ../app-marketplace
+cd ../app-marketplace && npm ci && npm test && forge lint && forge deploy -e production
+```
+
+The script copies `src`, `assets` and `test`, removes the `search:confluence` scope, sets the variant's app id, and writes `src/variant.js` with `CONFLUENCE_SEARCH = false`. In that build the documentation check and `find-related-docs` report only the Confluence pages linked on the work item; if the links cannot be read, the check is shown as "could not be checked". Set `SHIPBRIEF_MARKETPLACE_APP_ID` to build for your own registered copy.
+
 ## MCP server toggle
 
 The `rovo:mcp` module exposes the five actions as MCP tools at
@@ -122,7 +133,7 @@ where `<app id>` is the UUID at the end of `app.id` in `manifest.yml`.
 |---|---|
 | `read:jira-work` | Read the work item, its parent, links, subtasks, comments, remote links, child work items, the development field and the field list. |
 | `write:jira-work` | Post the brief as a comment. Used only by "Post as comment" and `post-brief-comment`. |
-| `search:confluence` | Search Confluence for pages that mention the work item. |
+| `search:confluence` | Search Confluence for pages that mention the work item. Not present in the Jira-only Marketplace build. |
 | `read:graph:issue:jira` | Starting point of every Teamwork Graph query. |
 | `read:graph:pull-request:external` | Linked pull requests from connected development tools. |
 | `read:graph:deployment:external` | Linked deployments. |
