@@ -32,6 +32,17 @@ async function jiraGet(path) {
   return res.json();
 }
 
+// Links come from user-editable data (remote links, PR and deployment providers).
+// Only https URLs are passed on, so a javascript: or data: link can never reach the UI or the agent.
+export function safeUrl(value) {
+  try {
+    const u = new URL(String(value));
+    return u.protocol === 'https:' ? u.href : undefined;
+  } catch (e) {
+    return undefined;
+  }
+}
+
 const browseUrl = (base, key) => (base && key ? `${base}/browse/${key}` : undefined);
 
 function siteBase(selfUrl) {
@@ -142,8 +153,9 @@ export async function findRelatedDocs(issueKey, summary = '') {
   try {
     const remote = await jiraGet(route`/rest/api/3/issue/${issueKey}/remotelink`);
     for (const r of remote) {
-      const url = r.object?.url || '';
-      if (/\/wiki\/|confluence/i.test(url) || /confluence/i.test(r.application?.type || '')) {
+      const url = safeUrl(r.object?.url);
+      if (!url) continue;
+      if (new URL(url).pathname.startsWith('/wiki/') || /confluence/i.test(r.application?.type || '')) {
         items.set(url, { title: r.object?.title || url, url, source: 'linked on issue' });
       }
     }
@@ -168,8 +180,8 @@ export async function findRelatedDocs(issueKey, summary = '') {
       const data = await res.json();
       const base = data._links?.base || '';
       for (const r of data.results || []) {
-        const url = `${base}${r.url || r.content?._links?.webui || ''}`;
-        if (!items.has(url)) {
+        const url = safeUrl(`${base}${r.url || r.content?._links?.webui || ''}`);
+        if (url && !items.has(url)) {
           items.set(url, {
             title: r.title || r.content?.title,
             url,
@@ -237,13 +249,13 @@ export async function getDeliveryStatus(issueId, cloudId) {
   return {
     pullRequests: {
       ...prs,
-      items: prs.items.map((p) => ({ title: p.title || p.displayName, url: p.url, status: p.status, updatedAt: p.lastUpdatedAt }))
+      items: prs.items.map((p) => ({ title: p.title || p.displayName, url: safeUrl(p.url), status: p.status, updatedAt: p.lastUpdatedAt }))
     },
     deployments: {
       ...deps,
       items: deps.items.map((d) => ({
         name: d.displayName,
-        url: d.url,
+        url: safeUrl(d.url),
         state: d.state,
         environment: d.environment?.displayName,
         environmentType: d.environment?.type,
@@ -252,7 +264,7 @@ export async function getDeliveryStatus(issueId, cloudId) {
     },
     goals: {
       ...goals,
-      items: goals.items.filter((g) => g.name && !g.archived).map((g) => ({ name: g.name, key: g.key, url: g.url, due: g.dueDateEndedAt }))
+      items: goals.items.filter((g) => g.name && !g.archived).map((g) => ({ name: g.name, key: g.key, url: safeUrl(g.url), due: g.dueDateEndedAt }))
     }
   };
 }
