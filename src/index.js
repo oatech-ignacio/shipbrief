@@ -7,6 +7,8 @@ const KEY_RE = /^[A-Z][A-Z0-9_]*-\d+$/i;
 // Rovo and MCP calls put inputs at the top level and page context in payload.context.
 function resolveTarget(payload = {}) {
   const pc = payload.context || {};
+  // Shape only (key names, no values), so the real Rovo / MCP payload can be confirmed in `forge logs`.
+  console.log('ShipBrief action payload shape', JSON.stringify({ payload: Object.keys(payload), context: Object.keys(pc), jira: Object.keys(pc.jira || {}) }));
   const issueKey = (payload.issueKey || pc.jira?.issueKey || '').toString().trim().toUpperCase();
   if (!issueKey || !KEY_RE.test(issueKey)) {
     return { error: 'No Jira work item key was provided. Ask the user for a key such as ABC-123.' };

@@ -1,10 +1,12 @@
 // Gathers context around a Jira work item. Every call runs as the current user,
 // so the brief never shows anything the user could not already see.
 import api, { route } from '@forge/api';
+import { TWG_QUERIES } from './twg-queries';
 
 const ISSUE_FIELDS =
   'summary,description,status,issuetype,priority,assignee,reporter,labels,fixVersions,duedate,parent,issuelinks,subtasks,comment,updated,created,components';
 const MAX_COMMENTS = 15;
+const MAX_CHILDREN = 100;
 
 // Atlassian Document Format -> plain text
 export function adfToText(node) {
@@ -66,7 +68,15 @@ function slimLinked(i, base) {
 export async function getIssueContext(issueKey, { siteUrl } = {}) {
   const raw = await jiraGet(route`/rest/api/3/issue/${issueKey}?fields=${ISSUE_FIELDS}`);
   const f = raw.fields;
-  const base = siteUrl || siteBase(raw.self);
+  let base = siteUrl || siteBase(raw.self);
+  if (!base) {
+    // On Forge, issue.self points at api.atlassian.com, so ask Jira for the site URL when the caller did not supply it.
+    try {
+      base = siteBase((await jiraGet(route`/rest/api/3/serverInfo`)).baseUrl);
+    } catch (e) {
+      /* links are simply omitted */
+    }
+  }
 
   const issue = {
     id: raw.id,
@@ -138,7 +148,45 @@ export async function getIssueContext(issueKey, { siteUrl } = {}) {
     }
   }
 
-  return { issue, parent, links, subtasks, comments };
+  // Epics (and anything above them) are judged by their children, so load those too.
+  let children = null;
+  if ((f.issuetype?.hierarchyLevel || 0) >= 1) {
+    try {
+      children = await getChildren(raw.key, base);
+    } catch (e) {
+      children = { items: [], unavailable: `Child work items could not be read (${e.message}).` };
+    }
+  }
+
+  return { issue, parent, links, subtasks, comments, children };
+}
+
+// Enhanced JQL search (POST /rest/api/3/search/jql): returns { issues, nextPageToken }, no total.
+export async function getChildren(parentKey, base) {
+  const res = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jql: `parent = "${parentKey}" ORDER BY created ASC`,
+      maxResults: MAX_CHILDREN,
+      fields: ['summary', 'status', 'issuetype', 'assignee', 'duedate', 'issuelinks']
+    })
+  });
+  if (!res.ok) {
+    const err = new Error(`Jira responded ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  const data = await res.json();
+  const items = (data.issues || []).map((i) => ({
+    ...slimLinked(i, base),
+    assignee: i.fields?.assignee?.displayName || null,
+    dueDate: i.fields?.duedate || null,
+    blockedBy: (i.fields?.issuelinks || [])
+      .filter((l) => l.inwardIssue && /block/i.test(l.type?.name || '') && l.inwardIssue.fields?.status?.statusCategory?.key !== 'done')
+      .map((l) => l.inwardIssue.key)
+  }));
+  return { items, truncated: Boolean(data.nextPageToken) };
 }
 
 // ---- Confluence -----------------------------------------------------------
@@ -207,27 +255,10 @@ export async function findRelatedDocs(issueKey, summary = '') {
 
 // ---- Teamwork Graph -------------------------------------------------------
 
-const TWG_QUERIES = {
-  pullRequests: `query ShipBriefPRs($id: ID!) {
-    jiraWorkItemLinkedExternalPullRequests(id: $id, first: 25) {
-      edges { node { __typename ... on ExternalPullRequest { id title displayName url status lastUpdatedAt } } }
-    }
-  }`,
-  deployments: `query ShipBriefDeployments($id: ID!) {
-    jiraWorkItemLinkedExternalDeployments(id: $id, first: 25) {
-      edges { node { __typename ... on ExternalDeployment { id displayName url state lastUpdatedAt environment { displayName type } } } }
-    }
-  }`,
-  goals: `query ShipBriefGoals($id: ID!) {
-    jiraWorkItemGoals(id: $id, first: 10) {
-      edges { node { __typename ... on AtlassianGoal { id name key url dueDateEndedAt archived } } }
-    }
-  }`
-};
-
 async function twg(name, id) {
   try {
-    const res = await api.asUser().requestTeamworkGraph(TWG_QUERIES[name], { id });
+    const query = TWG_QUERIES[name];
+    const res = await api.asUser().requestTeamworkGraph(query, { id }, /query (\w+)/.exec(query)[1]);
     const body = await res.json();
     if (body.errors?.length) {
       return { items: [], unavailable: `Teamwork Graph: ${body.errors[0].message}` };

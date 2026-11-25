@@ -41,7 +41,7 @@ export function classifyComments(comments = []) {
 }
 
 export function buildBrief(ctx, now = Date.now()) {
-  const { issue, parent, links = [], subtasks = [], comments = [], docs, delivery } = ctx;
+  const { issue, parent, links = [], subtasks = [], comments = [], children, docs, delivery } = ctx;
   const checks = [];
   const missing = [];
   const inFlight = issue.statusCategory === 'indeterminate';
@@ -109,6 +109,27 @@ export function buildBrief(ctx, now = Date.now()) {
     );
   }
 
+  // 6b. Child work items (epics): an epic is only as ready as its children.
+  const childItems = children?.items || [];
+  if (children?.unavailable) {
+    checks.push(check('children', 'Child work items', 'unknown', children.unavailable));
+  } else if (childItems.length) {
+    const open = childItems.filter((c) => !isDone(c));
+    const blocked = open.filter((c) => c.blockedBy?.length);
+    const overdue = open.filter((c) => c.dueDate && Date.parse(c.dueDate) < now - DAY);
+    const more = children.truncated ? ' (first 100 shown)' : '';
+    if (!open.length) checks.push(check('children', 'Child work items', 'pass', `All ${childItems.length} child work items are done${more}.`, 2));
+    else {
+      const bits = [`${open.length} of ${childItems.length} child work items are not done${more}`];
+      if (blocked.length) bits.push(`${blocked.length} blocked (${blocked.slice(0, 5).map((c) => c.key).join(', ')})`);
+      if (overdue.length) bits.push(`${overdue.length} overdue (${overdue.slice(0, 5).map((c) => c.key).join(', ')})`);
+      checks.push(check('children', 'Child work items', blocked.length || overdue.length ? 'fail' : 'warn', `${bits.join('; ')}.`, 2));
+    }
+  } else if (issue.isEpic && children) {
+    checks.push(check('children', 'Child work items', 'warn', 'This epic has no child work items yet.'));
+    missing.push('Child work items that break the epic down.');
+  }
+
   // 7. Open questions
   if (openQuestions.length) {
     checks.push(
@@ -117,6 +138,12 @@ export function buildBrief(ctx, now = Date.now()) {
     missing.push('Answers to the open questions in the comments.');
   } else {
     checks.push(check('questions', 'Open questions', 'pass', comments.length ? 'No unanswered questions in recent comments.' : 'No comments yet.', comments.length ? 1 : 0.5));
+  }
+
+  // 7b. Risks people raised in comments. Only counts while the work is still open.
+  if (risks.length && !isDone(issue)) {
+    const last = risks[risks.length - 1];
+    checks.push(check('risks', 'Raised risks', 'warn', `${risks.length} comment(s) mention a risk or blocker, latest from ${last.author}: "${clip(last.text, 120)}"`, 2));
   }
 
   // 8. Freshness and dates
@@ -139,7 +166,9 @@ export function buildBrief(ctx, now = Date.now()) {
   // 9. Verification evidence
   const allText = `${issue.description || ''}\n${comments.map((c) => c.text).join('\n')}`;
   if (TEST_RE.test(allText)) checks.push(check('testing', 'Test evidence', 'pass', 'Testing is mentioned in the description or comments.'));
-  else {
+  else if (childItems.length) {
+    // Parents are verified through their children, so no test note is expected here.
+  } else {
     checks.push(check('testing', 'Test evidence', 'warn', 'No mention of a test plan or verification.'));
     missing.push('A note on how this was (or will be) tested.');
   }
@@ -155,7 +184,8 @@ export function buildBrief(ctx, now = Date.now()) {
     const merged = prs.items.filter((p) => p.status === 'MERGED');
     if (open.length) checks.push(check('code', 'Pull requests', 'warn', `${open.length} pull request(s) still open, ${merged.length} merged.`, 2));
     else if (merged.length) checks.push(check('code', 'Pull requests', 'pass', `${merged.length} pull request(s) merged, none open.`, 2));
-    else checks.push(check('code', 'Pull requests', 'warn', 'Linked pull requests were declined; nothing merged.', 2));
+    else if (prs.items.some((p) => p.status === 'DECLINED')) checks.push(check('code', 'Pull requests', 'warn', 'Linked pull requests were declined; nothing merged.', 2));
+    else checks.push(check('code', 'Pull requests', 'unknown', `${prs.items.length} linked pull request(s) with unknown status.`));
   }
 
   // 11. Deployments (Teamwork Graph)
@@ -198,7 +228,7 @@ export function buildBrief(ctx, now = Date.now()) {
   let verdict;
   if (isDone(issue) && !fails.length) verdict = 'SHIPPED';
   else if (fails.length) verdict = 'NOT_READY';
-  else if (score >= 80 && warns.length <= 2) verdict = 'READY';
+  else if (score >= 85 && warns.length <= 1) verdict = 'READY';
   else verdict = 'NEEDS_ATTENTION';
 
   const headline = {
@@ -223,6 +253,7 @@ export function buildBrief(ctx, now = Date.now()) {
     goal: parent ? { key: parent.key, summary: parent.summary, status: parent.status, description: clip(parent.description, 400), url: parent.url } : null,
     goals,
     blockers,
+    children: childItems,
     decisions,
     riskSignals: risks,
     openQuestions,
